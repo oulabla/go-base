@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Go Base",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            // Путь к файлу main.go
+            "program": "${workspaceFolder}/cmd/go-base/main.go",
+            // Устанавливаем рабочую директорию в корень проекта
+            // Теперь путь "./gen/openapi" в коде будет найден верно
+            "cwd": "${workspaceFolder}",
+            "args": [],
+            "env": {},
+            "showLog": true
+        }
+    ]
+}
