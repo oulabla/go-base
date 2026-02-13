@@ -18,19 +18,25 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/oulabla/go-base/gen/go/user/v1"
+	"github.com/oulabla/go-base/internal/config"
 	"github.com/oulabla/go-base/internal/endpoints/user"
 )
 
-const (
-	grpcPort    = ":50051"
-	httpPort    = ":8080"
-	swaggerPort = ":8081"
-	apiHost     = "localhost:8080"
-)
-
 func main() {
+	// ────────────────────────────────────────────────
+	// Config
+	// ────────────────────────────────────────────────
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	configProvider, err := config.NewYAMLProvider(
+		"config/prod.yaml",
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	config.SetProvider(configProvider)
 
 	// ────────────────────────────────────────────────
 	// Controller
@@ -40,7 +46,7 @@ func main() {
 	// ────────────────────────────────────────────────
 	// gRPC server
 	// ────────────────────────────────────────────────
-	lis, err := net.Listen("tcp", grpcPort)
+	lis, err := net.Listen("tcp", config.GetString(ctx, config.K.ServerGrpcPort))
 	if err != nil {
 		log.Fatalf("failed to listen gRPC: %v", err)
 	}
@@ -49,7 +55,7 @@ func main() {
 	pb.RegisterUserServiceServer(grpcServer, userController)
 
 	go func() {
-		log.Printf("gRPC server listening on %s", grpcPort)
+		log.Printf("gRPC server listening on %s", config.GetString(ctx, config.K.ServerGrpcPort))
 		if err := grpcServer.Serve(lis); err != nil {
 			log.Fatalf("gRPC serve failed: %v", err)
 		}
@@ -63,7 +69,7 @@ func main() {
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}
 
-	if err := pb.RegisterUserServiceHandlerFromEndpoint(ctx, gwmux, grpcPort, opts); err != nil {
+	if err := pb.RegisterUserServiceHandlerFromEndpoint(ctx, gwmux, config.GetString(ctx, config.K.ServerGrpcPort), opts); err != nil {
 		log.Fatalf("failed to register gateway: %v", err)
 	}
 
@@ -75,14 +81,14 @@ func main() {
 	}).Handler(gwmux)
 
 	go func() {
-		log.Printf("HTTP/JSON gateway listening on %s", httpPort)
-		if err := http.ListenAndServe(httpPort, corsHandler); err != nil {
+		log.Printf("HTTP/JSON gateway listening on %s", config.GetString(ctx, config.K.ServerHttpPort))
+		if err := http.ListenAndServe(config.GetString(ctx, config.K.ServerHttpPort), corsHandler); err != nil {
 			log.Fatalf("HTTP gateway failed: %v", err)
 		}
 	}()
 
 	// ────────────────────────────────────────────────
-	// Swagger UI (порт 8081)
+	// Swagger UI
 	// ────────────────────────────────────────────────
 	go func() {
 		mux := http.NewServeMux()
@@ -117,7 +123,7 @@ func main() {
 			}
 
 			// Критично: подменяем host и schemes
-			swagger["host"] = apiHost
+			swagger["host"] = config.GetString(ctx, config.K.ServerSwaggerHost)
 			swagger["schemes"] = []string{"http"}
 
 			modified, err := json.Marshal(swagger)
@@ -135,9 +141,9 @@ func main() {
 			httpSwagger.URL("/swagger-files/user.swagger.json"),
 		))
 
-		log.Printf("Swagger UI available at http://localhost%s/swagger/index.html", swaggerPort)
+		log.Printf("Swagger UI available at http://localhost%s/swagger/index.html", config.GetString(ctx, config.K.ServerSwaggerPort))
 
-		if err := http.ListenAndServe(swaggerPort, mux); err != nil {
+		if err := http.ListenAndServe(config.GetString(ctx, config.K.ServerSwaggerPort), mux); err != nil {
 			log.Fatalf("Swagger server failed: %v", err)
 		}
 	}()

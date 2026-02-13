@@ -1,0 +1,21 @@
+config:
+    server_grpc_port:
+        usage: Порт который будет слушать GRPC сервер
+        group: server
+        value: ":50051"
+        type: string
+    server_http_port:
+        usage: Порт который будет слушать HTTP (JSON API) сервер
+        group: server
+        value: ":8080"
+        type: string
+    server_swagger_port:
+        usage: Порт который будет слушать Swagger сервер
+        group: server
+        value: ":8081"
+        type: string
+    server_swagger_host:
+        usage: Хост на который будет ходить Swagger при try it out
+        group: server
+        value: "localhost:8080"
+        type: string

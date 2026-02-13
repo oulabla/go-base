@@ -10,6 +10,7 @@
 BIN_DIR      := $(CURDIR)/bin
 PROTO_DIR    := proto
 GEN_DIR      := gen
+YQ           := $(BIN_DIR)/yq
 
 # ============================================================
 # Tool versions
@@ -60,41 +61,16 @@ help:
 # Init (one-time)
 # ============================================================
 init:
-	if [ -f .project.mk ]; then \
-		echo ".project.mk already exists. Remove it to re-init."; \
-		exit 1; \
-	fi
 	if [ -z "$(PROJECT_NAME)" ] || [ -z "$(MODULE)" ]; then \
-		echo "Usage:"; \
-		echo "  make init PROJECT_NAME=your-service MODULE=github.com/you/your-service"; \
+		echo "PROJECT_NAME or MODULE not set in .project.mk"; \
 		exit 1; \
 	fi
-	# создаем buf.gen.yaml если не существует
-	@if [ ! -f buf.gen.yaml ]; then \
-		echo "version: v1" > buf.gen.yaml; \
-		echo "plugins:" >> buf.gen.yaml; \
-		echo "  - name: go" >> buf.gen.yaml; \
-		echo "    out: gen/go" >> buf.gen.yaml; \
-		echo "    opt: paths=source_relative" >> buf.gen.yaml; \
-		echo "  - name: go-grpc" >> buf.gen.yaml; \
-		echo "    out: gen/go" >> buf.gen.yaml; \
-		echo "    opt: paths=source_relative" >> buf.gen.yaml; \
-		echo "  - name: grpc-gateway" >> buf.gen.yaml; \
-		echo "    out: gen/go" >> buf.gen.yaml; \
-		echo "    opt: paths=source_relative" >> buf.gen.yaml; \
-		echo "  - name: openapiv2" >> buf.gen.yaml; \
-		echo "    out: gen/openapi" >> buf.gen.yaml; \
-		echo "    opt: paths=source_relative" >> buf.gen.yaml; \
-		echo "Created buf.gen.yaml"; \
-	fi	
 	echo "PROJECT_NAME := $(PROJECT_NAME)" > .project.mk
-	echo "MODULE       := $(MODULE)" >> .project.mk
+	echo "MODULE := $(MODULE)" >> .project.mk
 	echo "Project initialized:"
-	echo "  PROJECT_NAME = $(PROJECT_NAME)"
-	echo "  MODULE       = $(MODULE)"
-	mkdir -p cmd/go-base internal internal/handler internal/service proto/$(PROJECT_NAME) gen
-	# Создаем go.mod
-	go mod init $(MODULE)
+	echo " PROJECT_NAME = $(PROJECT_NAME)"
+	echo " MODULE = $(MODULE)"
+	mkdir -p cmd/$(PROJECT_NAME) internal internal/endpoints internal/datastruct internal/app proto gen
 	$(MAKE) tools tidy
 
 # ============================================================
@@ -104,6 +80,13 @@ tools: $(BIN_DIR) buf protoc-plugins
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
+
+# парсер ямлов 
+yq-install: $(BIN_DIR)
+	@if [ ! -f $(YQ) ]; then \
+		echo "Installing yq into $(BIN_DIR)..."; \
+		GOBIN=$(BIN_DIR) go install github.com/mikefarah/yq/v4@latest; \
+	fi
 
 buf:
 	curl -sSL \
@@ -125,6 +108,15 @@ scaffold-tools:
 	fi
 	GOBIN=$(BIN_DIR) go install $(GO_SCAFFOLD_MODULE)@$(GO_SCAFFOLD_VERSION)
 
+# ============================================================
+# Generate-Config
+# ============================================================
+.PHONY: generate-config
+generate-config:
+	go run ./script/generate_config.go \
+		-config=config/prod.yaml \
+		-template=templates/keys.gen.go.tpl \
+		-output=internal/config/keys.gen.go
 # ============================================================
 # Generate
 # ============================================================
