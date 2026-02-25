@@ -1,5 +1,12 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
+
+# =============================================================================
+# gen_stub.sh
+# Генерирует boilerplate для gRPC-сервисов из .proto файлов
+# Создаёт: controller.go, <method>.go (по одному на rpc), register.go
+# + links.go с side-effect импортами всех endpoint-пакетов
+# =============================================================================
 
 mkdir -p internal/endpoints
 
@@ -8,64 +15,148 @@ camel_to_snake() {
 }
 
 if [ -z "${MODULE:-}" ] || [ -z "${PROJECT_NAME:-}" ]; then
-    echo "Error: MODULE and/or PROJECT_NAME not set. Run 'make init' first."
+    echo "Error: MODULE and/or PROJECT_NAME environment variables are not set."
+    echo "       Usually set via 'make init' or in Makefile."
     exit 1
 fi
 
-# Объявляем массив СНАРУЖИ циклов
-declare -a services=()
-
-# Собираем все proto-файлы один раз
 proto_files=$(find proto -name '*.proto' | sort)
+if [ -z "$proto_files" ]; then
+    echo "No .proto files found in ./proto"
+    exit 0
+fi
+
+# Массив для строк импортов в links.go
+declare -a IMPORT_LINES=()
 
 for proto_file in $proto_files; do
-    # Получаем все сервисы из файла (без подпроцесса while)
-    services_in_file=$(grep -E '^service ' "$proto_file" | awk '{print $2}')
+    # Определяем версию (v1, v2, ...) из пути
+    version=$(echo "$proto_file" | grep -oE '/v[0-9]+/' | tr -d '/' | head -n 1 || true)
+    if [ -z "$version" ]; then
+        PROTO_VERSION=""
+        version_dir=""
+    else
+        PROTO_VERSION="$version"
+        version_dir="/$version"
+    fi
+
+    # Все сервисы в файле
+    services_in_file=$(grep -E '^service ' "$proto_file" | awk '{print $2}' || true)
 
     for svc in $services_in_file; do
         svc_snake=$(camel_to_snake "$svc")
-        
-        # Убираем "service"/"Service" из конца
-        svc_pkg="${svc_snake}"
-        svc_pkg="${svc_pkg%_service}"
+        svc_pkg="${svc_snake%_service}"
         svc_pkg="${svc_pkg%service}"
 
-        endpoints_dir="internal/endpoints/${svc_pkg}"
-        mkdir -p "$endpoints_dir"
-
-        # Запоминаем сервис (формат: pkg|original_name)
-        services+=("${svc_pkg}|${svc}")
-
-        echo "Processed service: ${svc} → package ${svc_pkg}"
-
-        # 1. Controller (только если нет файла)
-        controller_file="${endpoints_dir}/controller.go"
-        if [ ! -f "$controller_file" ]; then
-            export SERVICE_PKG_NAME="$svc_pkg"
-            export SERVICE_NAME="$svc"
-            envsubst < templates/controller.go.tpl > "$controller_file"
-            echo "  Created controller   : $controller_file"
+        # Пути и имена
+        if [ -n "$PROTO_VERSION" ]; then
+            endpoints_dir="internal/endpoints/${svc_pkg}${version_dir}"
+            export SWAGGER_FILE="${PROTO_VERSION}/${svc_pkg}.swagger.json"
+            export PROTO_IMPORT="pb \"${MODULE}/gen/go/${svc_pkg}/${PROTO_VERSION}\""
+        else
+            endpoints_dir="internal/endpoints/${svc_pkg}"
+            export SWAGGER_FILE="${svc_pkg}.swagger.json"
+            export PROTO_IMPORT="pb \"${MODULE}/gen/go/${svc_pkg}\""
         fi
 
-        # 2. Методы (по одному файлу на rpc)
-        # Извлекаем rpc-методы без вложенного подпроцесса
-        methods=$(awk "/service ${svc}/,/}/" "$proto_file" | grep -E '^[[:space:]]*rpc ' | \
-                  sed -E 's/^[[:space:]]*rpc ([A-Za-z0-9_]+).*/\1/')
+        mkdir -p "$endpoints_dir"
+
+        echo "→ Service: ${svc} → pkg: ${svc_pkg} ver: ${PROTO_VERSION:-без версии} → ${endpoints_dir}"
+
+        export SERVICE_PKG_NAME="${svc_pkg}"
+        export SERVICE_NAME="$svc"
+
+        # 1. Controller (только если отсутствует)
+        controller_file="${endpoints_dir}/controller.go"
+        if [ ! -f "$controller_file" ]; then
+            envsubst < templates/controller.go.tpl > "$controller_file"
+            echo "   → controller       : ${controller_file}"
+        fi
+
+        # 2. Методы — надёжный парсер (игнорирует отступы, комментарии, опции)
+       methods=$(awk -v svc="${svc}" '
+    BEGIN { in_service = 0; brace_count = 0 }
+    $0 ~ ("service[[:space:]]+" svc "[[:space:]]*\\{") { in_service = 1; brace_count = 1 }
+    in_service {
+        # Считаем открывающие и закрывающие скобки
+        brace_count += gsub(/\{/, "{")
+        brace_count -= gsub(/\}/, "}")
+        
+        # Ищем строки с rpc
+        if ($0 ~ "rpc[[:space:]]+[A-Za-z0-9_]+") {
+            # Извлекаем имя метода
+            match($0, /rpc[[:space:]]+([A-Za-z0-9_]+)/, arr)
+            if (arr[1] != "") print arr[1]
+        }
+        
+        # Выходим из сервиса, когда скобки сбалансированы
+        if (brace_count <= 0) {
+            in_service = 0
+        }
+    }
+' "$proto_file" | sort -u || true)
+
+        echo "DEBUG: methods found for ${svc}: ${methods:-нет методов}"
 
         for method in $methods; do
             [ -z "$method" ] && continue
-
             method_snake=$(camel_to_snake "$method")
             method_file="${endpoints_dir}/${method_snake}.go"
 
             if [ ! -f "$method_file" ]; then
-                export SERVICE_PKG_NAME="$svc_pkg"
                 export METHOD_NAME="$method"
                 envsubst < templates/endpoint_method.go.tpl > "$method_file"
-                echo "  Created endpoint     : $method_file"
+                echo "   → method           : ${method_file}"
+            else
+                echo "   → method (skip)    : ${method_file} (уже существует)"
             fi
         done
+
+        # 3. register.go — всегда перезаписываем
+        register_file="${endpoints_dir}/register.go"
+        envsubst < templates/register.go.tpl > "$register_file"
+        gofmt -w "$register_file" >/dev/null 2>&1 || true
+        echo "   → register         : ${register_file}"
+
+        # 4. Собираем импорт для links.go
+        import_path="${MODULE}/${endpoints_dir}"
+        IMPORT_LINES+=("    _ \"${import_path}\"")
     done
 done
 
-echo "Endpoints generation finished."
+# =============================================================================
+# Генерация links.go
+# =============================================================================
+
+links_file="internal/endpoints/links.go"
+
+cat > "$links_file" << 'EOF'
+// Code generated by gen_stub.sh. DO NOT EDIT.
+
+package endpoints
+
+import (
+EOF
+
+if [ ${#IMPORT_LINES[@]} -gt 0 ]; then
+    printf "%s\n" "${IMPORT_LINES[@]}" | sort -u >> "$links_file"
+else
+    echo "    // нет зарегистрированных сервисов" >> "$links_file"
+fi
+
+cat >> "$links_file" << 'EOF'
+)
+EOF
+
+gofmt -w "$links_file" >/dev/null 2>&1 || true
+echo "→ links.go сгенерирован : ${links_file}"
+
+# =============================================================================
+# Финальная подсказка
+# =============================================================================
+
+echo ""
+echo "Убедитесь, что в main.go есть строка:"
+echo "    import _ \"${MODULE}/internal/endpoints\""
+echo ""
+echo "Генерация завершена."

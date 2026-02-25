@@ -11,3 +11,5 @@ plugins:
     opt: paths=source_relative
   - name: openapiv2
     out: gen/openapi
+    strategy: all #обязательно при allow_merge
+    opt: allow_merge=true,merge_file_name=all-apis

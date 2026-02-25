@@ -2,160 +2,108 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/rs/cors"
-	httpSwagger "github.com/swaggo/http-swagger"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	pb "github.com/oulabla/go-base/gen/go/user/v1"
 	"github.com/oulabla/go-base/internal/config"
-	"github.com/oulabla/go-base/internal/endpoints/user"
+	_ "github.com/oulabla/go-base/internal/endpoints"
+	"github.com/oulabla/go-base/internal/server"
 )
 
 func main() {
-	// ────────────────────────────────────────────────
-	// Config
-	// ────────────────────────────────────────────────
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	configProvider, err := config.NewYAMLProvider(
-		"config/prod.yaml",
-	)
+	// ────────────────────────────────────────────────
+	// Config
+	// ────────────────────────────────────────────────
+	configProvider, err := config.NewYAMLProvider("config/prod.yaml")
 	if err != nil {
-		panic(err)
+		log.Fatalf("failed to load config: %v", err)
 	}
 
 	config.SetProvider(configProvider)
 
 	// ────────────────────────────────────────────────
-	// Controller
+	// gRPC сервер (один на все сервисы)
 	// ────────────────────────────────────────────────
-	userController := user.NewController()
-
-	// ────────────────────────────────────────────────
-	// gRPC server
-	// ────────────────────────────────────────────────
-	lis, err := net.Listen("tcp", config.GetString(ctx, config.K.ServerGrpcPort))
+	grpcAddr := config.GetString(ctx, config.K.ServerGrpcPort)
+	lis, err := net.Listen("tcp", grpcAddr)
 	if err != nil {
-		log.Fatalf("failed to listen gRPC: %v", err)
+		log.Fatalf("failed to listen gRPC on %s: %v", grpcAddr, err)
 	}
 
-	grpcServer := grpc.NewServer()
-	pb.RegisterUserServiceServer(grpcServer, userController)
+	grpcServer := grpc.NewServer(
+	// grpc.ChainUnaryInterceptor(...),
+	// grpc.ChainStreamInterceptor(...),
+	)
+
+	server.RegisterAllGRPC(grpcServer)
 
 	go func() {
-		log.Printf("gRPC server listening on %s", config.GetString(ctx, config.K.ServerGrpcPort))
-		if err := grpcServer.Serve(lis); err != nil {
+		log.Printf("gRPC server listening on %s", grpcAddr)
+		if err := grpcServer.Serve(lis); err != nil && err != grpc.ErrServerStopped {
 			log.Fatalf("gRPC serve failed: %v", err)
 		}
 	}()
 
 	// ────────────────────────────────────────────────
-	// HTTP Gateway (JSON API)
+	// HTTP/JSON gateway (один mux на все сервисы)
 	// ────────────────────────────────────────────────
-	gwmux := runtime.NewServeMux()
-	opts := []grpc.DialOption{
+	gwmux := runtime.NewServeMux(
+	// runtime.WithErrorHandler(...),
+	// runtime.WithForwardResponseOption(...),
+	)
+
+	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}
 
-	if err := pb.RegisterUserServiceHandlerFromEndpoint(ctx, gwmux, config.GetString(ctx, config.K.ServerGrpcPort), opts); err != nil {
-		log.Fatalf("failed to register gateway: %v", err)
+	if err := server.RegisterAllGateway(ctx, gwmux, dialOpts); err != nil {
+		log.Fatalf("failed to register gateway endpoints: %v", err)
 	}
 
 	corsHandler := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
 		AllowedHeaders:   []string{"*"},
 		AllowCredentials: false,
 	}).Handler(gwmux)
 
+	httpAddr := config.GetString(ctx, config.K.ServerHttpPort)
 	go func() {
-		log.Printf("HTTP/JSON gateway listening on %s", config.GetString(ctx, config.K.ServerHttpPort))
-		if err := http.ListenAndServe(config.GetString(ctx, config.K.ServerHttpPort), corsHandler); err != nil {
+		log.Printf("HTTP/JSON gateway listening on %s", httpAddr)
+		if err := http.ListenAndServe(httpAddr, corsHandler); err != nil {
 			log.Fatalf("HTTP gateway failed: %v", err)
 		}
 	}()
 
 	// ────────────────────────────────────────────────
-	// Swagger UI
+	// Swagger UI — по одному серверу на каждый сервис
 	// ────────────────────────────────────────────────
-	go func() {
-		mux := http.NewServeMux()
-
-		// Отдаём swagger.json с подменой host
-		mux.HandleFunc("/swagger-files/", func(w http.ResponseWriter, r *http.Request) {
-			targetFile := filepath.Base(r.URL.Path)
-			var foundPath string
-
-			_ = filepath.Walk("./gen/openapi", func(path string, info os.FileInfo, err error) error {
-				if err == nil && !info.IsDir() && info.Name() == targetFile {
-					foundPath = path
-				}
-				return nil
-			})
-
-			if foundPath == "" {
-				http.Error(w, "Swagger file not found", http.StatusNotFound)
-				return
-			}
-
-			data, err := os.ReadFile(foundPath)
-			if err != nil {
-				http.Error(w, "Failed to read swagger file", http.StatusInternalServerError)
-				return
-			}
-
-			var swagger map[string]interface{}
-			if err := json.Unmarshal(data, &swagger); err != nil {
-				http.Error(w, "Invalid swagger file", http.StatusInternalServerError)
-				return
-			}
-
-			// Критично: подменяем host и schemes
-			swagger["host"] = config.GetString(ctx, config.K.ServerSwaggerHost)
-			swagger["schemes"] = []string{"http"}
-
-			modified, err := json.Marshal(swagger)
-			if err != nil {
-				http.Error(w, "Failed to encode swagger", http.StatusInternalServerError)
-				return
-			}
-
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(modified)
-		})
-
-		// Swagger UI
-		mux.Handle("/swagger/", httpSwagger.Handler(
-			httpSwagger.URL("/swagger-files/user.swagger.json"),
-		))
-
-		log.Printf("Swagger UI available at http://localhost%s/swagger/index.html", config.GetString(ctx, config.K.ServerSwaggerPort))
-
-		if err := http.ListenAndServe(config.GetString(ctx, config.K.ServerSwaggerPort), mux); err != nil {
-			log.Fatalf("Swagger server failed: %v", err)
-		}
-	}()
+	go server.StartSwaggerServer(ctx)
 
 	// ────────────────────────────────────────────────
 	// Graceful shutdown
 	// ────────────────────────────────────────────────
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+
 	<-sigChan
 
-	log.Println("Shutting down...")
+	log.Println("Shutting down servers...")
 	grpcServer.GracefulStop()
 	cancel()
+
+	// Даём время на завершение http-серверов swagger (опционально)
+	// time.Sleep(2 * time.Second)
 }

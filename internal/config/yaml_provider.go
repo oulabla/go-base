@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"strconv"
 	"strings"
@@ -18,8 +19,8 @@ type yamlProvider struct {
 }
 
 type entry struct {
-	Type  string      `yaml:"type"`
-	Value interface{} `yaml:"value"`
+	Type  string `yaml:"type"`
+	Value any    `yaml:"value"`
 }
 
 type rawRoot struct {
@@ -40,9 +41,7 @@ func NewYAMLProvider(paths ...string) (*yamlProvider, error) {
 			return nil, fmt.Errorf("parse yaml %s: %w", path, err)
 		}
 
-		for k, v := range root.Config {
-			merged[k] = v
-		}
+		maps.Copy(merged, root.Config)
 	}
 
 	return &yamlProvider{
