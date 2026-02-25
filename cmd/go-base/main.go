@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"net"
 	"net/http"
@@ -24,9 +25,21 @@ func main() {
 	defer cancel()
 
 	// ────────────────────────────────────────────────
+	// Парсинг флага --local
+	// ────────────────────────────────────────────────
+	var useLocalConfig bool
+	flag.BoolVar(&useLocalConfig, "local", false, "use local.yaml instead of prod.yaml")
+	flag.Parse() // важно вызвать после всех определений флагов
+
+	// ────────────────────────────────────────────────
 	// Config
 	// ────────────────────────────────────────────────
-	configProvider, err := config.NewYAMLProvider("config/prod.yaml")
+	configFile := "config/prod.yaml"
+	if useLocalConfig {
+		configFile = "config/local.yaml"
+	}
+
+	configProvider, err := config.NewYAMLProvider(configFile)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
