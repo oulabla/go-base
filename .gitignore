@@ -1,1 +1,4 @@
 bin/
+config/secret.yaml
+coverage.out
+coverage.html
