@@ -1,13 +1,10 @@
 {
   "swagger": "2.0",
   "info": {
-    "title": "point/v1/point.proto",
+    "title": "user/v1/user.proto",
     "version": "version not set"
   },
   "tags": [
-    {
-      "name": "PointService"
-    },
     {
       "name": "UserService"
     }
@@ -19,30 +16,6 @@
     "application/json"
   ],
   "paths": {
-    "/v1/point/status": {
-      "get": {
-        "summary": "Проверка статуса сервиса (v1)",
-        "description": "Возвращает статус, версию и текущее время",
-        "operationId": "point_v1_get_status",
-        "responses": {
-          "200": {
-            "description": "Успешный ответ",
-            "schema": {
-              "$ref": "#/definitions/v1GetStatusResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "tags": [
-          "point"
-        ]
-      }
-    },
     "/v1/users": {
       "post": {
         "operationId": "UserService_CreateUser",
@@ -159,23 +132,6 @@
       "required": [
         "id"
       ]
-    },
-    "v1GetStatusResponse": {
-      "type": "object",
-      "properties": {
-        "status": {
-          "type": "string",
-          "title": "\"ok\", \"degraded\", \"down\""
-        },
-        "version": {
-          "type": "string",
-          "title": "версия сервиса (api + app)"
-        },
-        "timestamp": {
-          "type": "string",
-          "title": "RFC3339"
-        }
-      }
     },
     "v1GetUserResponse": {
       "type": "object",

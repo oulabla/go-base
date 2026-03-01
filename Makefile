@@ -16,7 +16,8 @@ CURRENT_DATE := $(shell date +%Y-%m-%d)
 # =============================================================================
 # Инструменты и версии
 # =============================================================================
-BUF_VERSION          := 1.45.0
+BUF_VERSION          := v1.45.0
+YQ_VERSION           := v4.52.4
 PROTOC_GEN_GO        := v1.36.0
 PROTOC_GEN_GO_GRPC   := v1.5.1
 GRPC_GATEWAY_VERSION := v2.23.0
@@ -27,18 +28,20 @@ MOCKERY_VERSION      := v3.6.4
 # Пути к бинарникам
 # =============================================================================
 BUF                  := $(BIN_DIR)/buf
+YQ                   := $(BIN_DIR)/yq
 MOCKERY              := $(BIN_DIR)/mockery
 
 # =============================================================================
 .DEFAULT_GOAL := help
-.PHONY: help all build run generate proto-generate scaffold tools clean test lint add-service
+.PHONY: help all build run generate generate-config proto-generate scaffold tools clean test lint add-service
 
 help:
 	@echo ""
 	@echo "Доступные команды:"
 	@echo ""
-	@echo "  make tools                                 Установить инструменты"
-	@echo "  make generate                              Генерация proto + stubs"
+	@echo "  make tools                                 Установить инструменты (buf, yq, mockery, protoc plugins)"
+	@echo "  make generate                              Генерация proto + stubs + config keys"
+	@echo "  make generate-config                       Генерация только config keys"
 	@echo "  make build                                 Сборка → ./bin/$(PROJECT_NAME)"
 	@echo "  make run                                   Запуск"
 	@echo "  make test                                  Тесты"
@@ -53,16 +56,23 @@ help:
 # =============================================================================
 # Tools
 # =============================================================================
-tools: $(BIN_DIR) buf protoc-plugins mockery
+tools: $(BIN_DIR) buf yq protoc-plugins mockery
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
 buf:
 	curl -sSL \
-	  "https://github.com/bufbuild/buf/releases/download/v$(BUF_VERSION)/buf-Linux-x86_64" \
+	  "https://github.com/bufbuild/buf/releases/download/$(BUF_VERSION)/buf-Linux-x86_64" \
 	  -o $(BUF)
 	chmod +x $(BUF)
+
+yq:
+	curl -sSL \
+	  "https://github.com/mikefarah/yq/releases/download/$(YQ_VERSION)/yq_linux_amd64" \
+	  -o $(YQ)
+	chmod +x $(YQ)
+	@echo "yq $(YQ_VERSION) installed → $(YQ)"
 
 protoc-plugins:
 	GOBIN=$(BIN_DIR) go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO)
@@ -76,7 +86,11 @@ mockery:
 # =============================================================================
 # Генерация
 # =============================================================================
-generate: proto-generate scaffold
+generate: proto-generate scaffold generate-config
+
+generate-config:
+	@echo "→ Generating config keys..."
+	@bash script/generate_config.sh
 
 proto-generate:
 	PATH="$(CURDIR)/bin:$$PATH" $(BUF) generate $(PROTO_DIR)
@@ -106,11 +120,10 @@ tidy:
 	go mod tidy
 
 # =============================================================================
-# Добавление сервиса — главная новая цель
+# Добавление сервиса
 # =============================================================================
 .PHONY: add-service
 
-.PHONY: add-service
 add-service: ; @bash script/add_service.sh $(filter-out $@,$(MAKECMDGOALS))
 %:
 	@:

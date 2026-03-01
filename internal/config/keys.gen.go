@@ -32,10 +32,14 @@ func SetProvider(p ConfigProvider) {
 }
 
 type Keys struct {
+	// Название приложения
+	ApplicationName key
 	// Порт который будет слушать GRPC сервер
 	ServerGrpcPort key
 	// Порт который будет слушать HTTP (JSON API) сервер
 	ServerHttpPort key
+	// Порт который будет слушать Prometheus сервер
+	ServerMetricPort key
 	// Хост на который будет ходить Swagger при try it out
 	ServerSwaggerHost key
 	// Порт который будет слушать Swagger сервер
@@ -43,8 +47,10 @@ type Keys struct {
 }
 
 var K = Keys{
+	ApplicationName:   "application_name",
 	ServerGrpcPort:    "server_grpc_port",
 	ServerHttpPort:    "server_http_port",
+	ServerMetricPort:  "server_metric_port",
 	ServerSwaggerHost: "server_swagger_host",
 	ServerSwaggerPort: "server_swagger_port",
 }

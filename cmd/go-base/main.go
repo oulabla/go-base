@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -11,13 +10,18 @@ import (
 	"syscall"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/oulabla/go-base/internal/config"
-	_ "github.com/oulabla/go-base/internal/endpoints"
+	"github.com/oulabla/go-base/internal/config/secret"
+	"github.com/oulabla/go-base/internal/metric"
 	"github.com/oulabla/go-base/internal/server"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 func main() {
@@ -25,14 +29,40 @@ func main() {
 	defer cancel()
 
 	// ────────────────────────────────────────────────
-	// Парсинг флага --local
+	// Флаги
 	// ────────────────────────────────────────────────
-	var useLocalConfig bool
-	flag.BoolVar(&useLocalConfig, "local", false, "use local.yaml instead of prod.yaml")
-	flag.Parse() // важно вызвать после всех определений флагов
+	var (
+		useLocalConfig bool
+		debug          bool
+	)
+
+	flag.BoolVar(&useLocalConfig, "local", false, "use config/local.yaml instead of config/prod.yaml")
+	flag.BoolVar(&debug, "debug", false, "enable debug logging and colored console output")
+	flag.Parse()
 
 	// ────────────────────────────────────────────────
-	// Config
+	// Инициализация логгера (JSON в prod, цветной в debug)
+	// ────────────────────────────────────────────────
+	server.Init(debug)
+
+	// Устанавливаем уровень лога глобально
+	if debug {
+		log.Logger = log.Logger.Level(zerolog.DebugLevel)
+	}
+
+	// Логируем запуск приложения
+	log.Info().
+		Bool("debug", debug).
+		Str("config", func() string {
+			if useLocalConfig {
+				return "local.yaml"
+			}
+			return "prod.yaml"
+		}()).
+		Msg("starting application")
+
+	// ────────────────────────────────────────────────
+	// Конфигурация
 	// ────────────────────────────────────────────────
 	configFile := "config/prod.yaml"
 	if useLocalConfig {
@@ -41,48 +71,97 @@ func main() {
 
 	configProvider, err := config.NewYAMLProvider(configFile)
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		log.Fatal().
+			Err(err).
+			Str("config_file", configFile).
+			Msg("failed to load config")
 	}
 
 	config.SetProvider(configProvider)
 
+	appName := config.GetString(ctx, config.K.ApplicationName)
+	if appName == "" {
+		log.Fatal().Msg("application name is not set")
+	}
+	ctx = context.WithValue(ctx, "application_name", appName)
+
 	// ────────────────────────────────────────────────
-	// gRPC сервер (один на все сервисы)
+	// Секреты
+	// ────────────────────────────────────────────────
+	secretProvider, err := secret.NewYAMLSecretProvider("config/secret.yaml")
+	if err != nil {
+		log.Fatal().
+			Err(err).
+			Str("config_file", configFile).
+			Msg("failed to load secrets")
+	}
+	secret.SetProvider(secretProvider)
+
+	// ────────────────────────────────────────────────
+	// Prometheus metrics endpoint
+	// ────────────────────────────────────────────────
+	http.Handle("/metrics", promhttp.Handler())
+
+	metricAddr := config.GetString(ctx, config.K.ServerMetricPort)
+
+	go func() {
+		log.Info().
+			Str("addr", metricAddr).
+			Msg("starting HTTP metrics server")
+
+		if err := http.ListenAndServe(metricAddr, nil); err != nil {
+			log.Error().
+				Err(err).
+				Str("addr", metricAddr).
+				Msg("HTTP metrics server failed")
+		}
+	}()
+
+	// ────────────────────────────────────────────────
+	// gRPC сервер
 	// ────────────────────────────────────────────────
 	grpcAddr := config.GetString(ctx, config.K.ServerGrpcPort)
+
 	lis, err := net.Listen("tcp", grpcAddr)
 	if err != nil {
-		log.Fatalf("failed to listen gRPC on %s: %v", grpcAddr, err)
+		log.Fatal().
+			Err(err).
+			Str("addr", grpcAddr).
+			Msg("failed to listen on gRPC address")
 	}
 
 	grpcServer := grpc.NewServer(
-	// grpc.ChainUnaryInterceptor(...),
-	// grpc.ChainStreamInterceptor(...),
+		grpc.UnaryInterceptor(metric.UnaryServerInterceptor()),
 	)
 
 	server.RegisterAllGRPC(grpcServer)
 
 	go func() {
-		log.Printf("gRPC server listening on %s", grpcAddr)
+		log.Info().
+			Str("addr", grpcAddr).
+			Msg("starting gRPC server")
+
 		if err := grpcServer.Serve(lis); err != nil && err != grpc.ErrServerStopped {
-			log.Fatalf("gRPC serve failed: %v", err)
+			log.Error().
+				Err(err).
+				Str("addr", grpcAddr).
+				Msg("gRPC server failed")
 		}
 	}()
 
 	// ────────────────────────────────────────────────
-	// HTTP/JSON gateway (один mux на все сервисы)
+	// HTTP/JSON gateway (REST API)
 	// ────────────────────────────────────────────────
-	gwmux := runtime.NewServeMux(
-	// runtime.WithErrorHandler(...),
-	// runtime.WithForwardResponseOption(...),
-	)
+	gwmux := runtime.NewServeMux()
 
 	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}
 
 	if err := server.RegisterAllGateway(ctx, gwmux, dialOpts); err != nil {
-		log.Fatalf("failed to register gateway endpoints: %v", err)
+		log.Fatal().
+			Err(err).
+			Msg("failed to register gateway endpoints")
 	}
 
 	corsHandler := cors.New(cors.Options{
@@ -93,15 +172,22 @@ func main() {
 	}).Handler(gwmux)
 
 	httpAddr := config.GetString(ctx, config.K.ServerHttpPort)
+
 	go func() {
-		log.Printf("HTTP/JSON gateway listening on %s", httpAddr)
+		log.Info().
+			Str("addr", httpAddr).
+			Msg("starting HTTP/JSON gateway")
+
 		if err := http.ListenAndServe(httpAddr, corsHandler); err != nil {
-			log.Fatalf("HTTP gateway failed: %v", err)
+			log.Error().
+				Err(err).
+				Str("addr", httpAddr).
+				Msg("HTTP/JSON gateway failed")
 		}
 	}()
 
 	// ────────────────────────────────────────────────
-	// Swagger UI — по одному серверу на каждый сервис
+	// Swagger UI (если реализован)
 	// ────────────────────────────────────────────────
 	go server.StartSwaggerServer(ctx)
 
@@ -113,10 +199,10 @@ func main() {
 
 	<-sigChan
 
-	log.Println("Shutting down servers...")
+	log.Info().Msg("received shutdown signal, gracefully stopping servers...")
+
 	grpcServer.GracefulStop()
 	cancel()
 
-	// Даём время на завершение http-серверов swagger (опционально)
-	// time.Sleep(2 * time.Second)
+	log.Info().Msg("shutdown complete")
 }

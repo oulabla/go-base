@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"fmt"
 	"net/http"
 	"os"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/oulabla/go-base/internal/config"
 	httpSwagger "github.com/swaggo/http-swagger"
@@ -16,7 +18,8 @@ import (
 func StartSwaggerServer(ctx context.Context) {
 	addr := config.GetString(ctx, config.K.ServerSwaggerPort) // например ":8081"
 	if addr == "" {
-		log.Println("Swagger port not configured, skipping")
+		log.Warn().
+			Msg("Swagger port not configured, , skipping")
 		return
 	}
 
@@ -33,11 +36,14 @@ func StartSwaggerServer(ctx context.Context) {
 		httpSwagger.DeepLinking(true),
 		// httpSwagger.Prefix("/swagger"),   // если хотите путь /swagger/
 	))
-
-	log.Printf("Unified Swagger UI available at http://localhost%s/", addr)
+	log.Info().
+		Str("addr", addr).
+		Msg("starting HTTP Swagger UI server")
 
 	if err := http.ListenAndServe(addr, mux); err != nil && err != http.ErrServerClosed {
-		log.Printf("Swagger server failed: %v", err)
+		log.Err(err).
+			Str("addr", addr).
+			Msg("Swagger listen error")
 	}
 }
 
@@ -47,7 +53,9 @@ func serveMergedSwaggerJSON(ctx context.Context, w http.ResponseWriter) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		http.Error(w, "Cannot read merged OpenAPI file", http.StatusInternalServerError)
-		log.Printf("Failed to read %s: %v", filePath, err)
+		log.Err(err).
+			Msg(fmt.Sprintf("Failed to read %s: %v", filePath, err))
+
 		return
 	}
 

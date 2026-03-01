@@ -1,4 +1,9 @@
 config:
+    application_name:
+        usage: Название приложения
+        group: application
+        value: "go-base"
+        type: string
     server_grpc_port:
         usage: Порт который будет слушать GRPC сервер
         group: server
@@ -13,6 +18,11 @@ config:
         usage: Порт который будет слушать Swagger сервер
         group: server
         value: ":8081"
+        type: string
+    server_metric_port:
+        usage: Порт который будет слушать Prometheus сервер
+        group: server
+        value: ":2112"
         type: string
     server_swagger_host:
         usage: Хост на который будет ходить Swagger при try it out
