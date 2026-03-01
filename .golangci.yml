@@ -1,0 +1,60 @@
+# .golangci.yml
+# Обязательно указываем версию конфигурации (иначе ошибка "unsupported version")
+version: "2"
+
+# Исключения теперь живут в linters.exclusions
+# (issues.exclude-rules перемещены сюда в v2)
+linters:
+  exclusions:
+    # Пресеты исключений (очень полезно в v2 — уменьшают шум)
+    presets:
+      - comments               # комментарии
+      - common-false-positives # типичные ложные срабатывания
+      - legacy                 # устаревшие конструкции
+      # - std-error-handling   # если используешь errors.Is/As — можно включить
+
+    # Правила исключений по пути / линтеру
+    rules:
+      # Исключаем gocover (покрытие) для ненужных директорий
+      - path: ^internal/config/
+        linters:
+          - gocover
+      - path: ^internal/metric/
+        linters:
+          - gocover
+      - path: ^internal/server/
+        linters:
+          - gocover
+      - path: ^script/
+        linters:
+          - gocover
+      # Можно добавить генерируемый код
+      - path: ^gen/
+        linters:
+          - gocover
+          - staticcheck   # например, если генерируемый код шумит
+
+    # Полное исключение целых путей (файлы/директории не будут даже анализироваться для отчёта)
+    paths:
+      - ^gen/.*\.go$           # весь генерируемый код
+      - ^templates/.*\.go$
+      - ^internal/server/.*\.go$
+      - ^internal/metric/.*\.go$
+      - ^internal/config/.*\.go$
+      # - vendor/              # если есть vendor
+      # - third_party/
+
+# Настройки конкретных линтеров
+linters-settings:
+  gocover:
+    min-coverage: 0.0      # минимальный порог покрытия (0.0 = не проверять)
+    # Другие настройки gocover, если нужны (редко используются)
+    # allow-zero: true
+    # ignore-packages:
+    #   - internal/config/...
+
+# Дополнительно: глобальные настройки запуска (опционально)
+run:
+  timeout: 5m
+  # skip-dirs: []          # deprecated в v2 — используй exclusions.paths
+  # skip-files: []         # deprecated — используй exclusions.paths / rules

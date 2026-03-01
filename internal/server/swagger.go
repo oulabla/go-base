@@ -80,5 +80,8 @@ func serveMergedSwaggerJSON(ctx context.Context, w http.ResponseWriter) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(modified)
+	_, err = w.Write(modified)
+	if err != nil {
+		log.Err(err).Msg("write swagger")
+	}
 }

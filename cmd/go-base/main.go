@@ -24,6 +24,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type appNameKeyType string
+
+const appNameKey appNameKeyType = "application_name"
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -83,7 +87,7 @@ func main() {
 	if appName == "" {
 		log.Fatal().Msg("application name is not set")
 	}
-	ctx = context.WithValue(ctx, "application_name", appName)
+	ctx = context.WithValue(ctx, appNameKey, appName)
 
 	// ────────────────────────────────────────────────
 	// Секреты

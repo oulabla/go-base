@@ -19,7 +19,12 @@ func NewYAMLSecretProvider(path string) (*YAMLSecretProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("не удалось открыть файл: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		err = f.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("closing secret yaml")
+		}
+	}()
 
 	data, err := io.ReadAll(f)
 	if err != nil {

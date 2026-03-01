@@ -127,7 +127,7 @@ func main() {
 func toCamel(s string) string {
 	parts := strings.Split(s, "_")
 	for i := range parts {
-		parts[i] = strings.Title(parts[i])
+		parts[i] = strings.ToTitle(parts[i])
 	}
 	return strings.Join(parts, "")
 }
